@@ -173,6 +173,7 @@ func (p *Pool) handleResult(workerID int, job *store.Job, execErr error, lockedB
 }
 
 // hostnamePID returns a unique worker identifier (hostname:pid).
+// ponytail: hardcoded worker ID, os.Hostname()+os.Getpid() for multi-process.
 func hostnamePID() string {
 	// In production this would use os.Hostname()+os.Getpid().
 	// For simplicity in the demo, we return a static string since

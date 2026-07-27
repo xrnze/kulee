@@ -256,31 +256,31 @@ Files: `internal/config/config.go`, `.env.example`,
 - [x] Implement full-jitter retry backoff + `run_after` column
 - [x] Implement dead-letter transition after `max_attempts`
 - [x] Implement 3 demo job types with registry map
-- [ ] Add `/api/stats` endpoint (DB sliding window)
+- [x] Add `/api/stats` endpoint (DB sliding window)
 
 **Step 3 — API + dashboard skeleton**
 Files: `internal/api/handlers.go`, `internal/api/stats.go`,
 `web/src/lib/api.ts`, `web/src/routes/index.tsx`,
 `web/src/components/JobTable.tsx`, `web/vite.config.ts`,
 `cmd/server/main.go` (wired up).
-- [ ] API handlers: POST /api/jobs, GET /api/jobs (cursor-paginated),
+- [x] API handlers: POST /api/jobs, GET /api/jobs (cursor-paginated),
       GET /api/jobs/:id, POST /api/jobs/:id/retry, DELETE /api/jobs/:id,
       DELETE /api/jobs/dead
-- [ ] Go server serves `web/dist/` as static files on `/`
-- [ ] Frontend: initial job list via TanStack Query
-- [ ] Frontend: job submission form (pick type, paste JSON payload)
-- [ ] Frontend: manual refresh button
-- [ ] Vite dev proxy to Go backend
+- [x] Go server serves `web/dist/` as static files on `/`
+- [x] Frontend: initial job list via TanStack Query
+- [x] Frontend: job submission form (pick type, paste JSON payload)
+- [x] Frontend: manual refresh button
+- [x] Vite dev proxy to Go backend
 
 **Step 4 — polish and ship**
 Files: `web/src/components/StatsChart.tsx`,
 `web/src/components/DeadLetterView.tsx`, `README.md`.
-- [ ] Stats dashboard view (throughput + queue depth chart)
-- [ ] Dead-letter view with manual retry and delete buttons
-- [ ] Graceful shutdown (drain workers with `SHUTDOWN_DRAIN_SECONDS` deadline)
-- [ ] Load test with `vegeta` at a few worker pool sizes, record results
-- [ ] Deploy (Fly.io or Railway)
-- [ ] Write README covering section 11 tradeoffs
+- [x] Stats dashboard view (throughput + queue depth chart)
+- [x] Dead-letter view with manual retry and delete buttons
+- [x] Graceful shutdown (drain workers with `SHUTDOWN_DRAIN_SECONDS` deadline)
+- [x] Load test with `vegeta` at a few worker pool sizes, record results
+- [x] Deploy (Fly.io or Railway)
+- [x] Write README covering section 11 tradeoffs
 
 ## 10. Success criteria
 

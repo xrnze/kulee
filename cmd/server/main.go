@@ -1,16 +1,19 @@
 // Command server is the binary entry point for the job queue system.
 //
-// Step 2: runs a CLI-driven demo backed by Postgres. The worker pool
-// claims jobs from the store, heartbeats, and handles retries with
-// full-jitter backoff. A reaper goroutine sweeps expired leases.
+// Starts an HTTP API server, a worker pool, and a reaper goroutine.
 package main
 
 import (
 	"context"
 	"encoding/json"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	"kulee/internal/api"
 	"kulee/internal/config"
 	"kulee/internal/jobtypes"
 	"kulee/internal/store"
@@ -44,7 +47,6 @@ func main() {
 	reg.Register("webhook_delivery", jobtypes.WebhookDelivery)
 	reg.Register("generate_report", jobtypes.GenerateReport)
 
-	// Build the job handler: lookup from the registry.
 	handler := func(ctx context.Context, jobType string, payload json.RawMessage) error {
 		fn, err := reg.Lookup(jobType)
 		if err != nil {
@@ -62,10 +64,13 @@ func main() {
 		RetryCap:      cfg.RetryCap,
 	}
 
-	pool := worker.NewPool(ctx, st, handler, poolCfg)
+	poolCtx, poolCancel := context.WithCancel(context.Background())
+	defer poolCancel()
+
+	pool := worker.NewPool(poolCtx, st, handler, poolCfg)
 
 	// Start reaper goroutine.
-	reaperCtx, reaperCancel := context.WithCancel(ctx)
+	reaperCtx, reaperCancel := context.WithCancel(context.Background())
 	defer reaperCancel()
 	go func() {
 		tick := time.NewTicker(cfg.ReaperInterval)
@@ -87,31 +92,37 @@ func main() {
 		}
 	}()
 
-	// Enqueue demo jobs.
-	types := []string{"send_email", "webhook_delivery", "generate_report"}
-	payloads := map[string]string{
-		"send_email":       `{"to":"user@example.com","subject":"Hello","body":"Test"}`,
-		"webhook_delivery": `{"url":"https://httpbin.org/post","body":{"key":"value"},"timeout_seconds":10}`,
-		"generate_report":  `{"rows":1000,"output_format":"csv"}`,
+	// Set up HTTP server.
+	mux := http.NewServeMux()
+	api.NewHandler(st, cfg.StatsWindow).Register(mux)
+
+	// Serve static frontend from web/dist.
+	mux.Handle("GET /", http.FileServer(http.Dir("web/dist")))
+
+	srv := &http.Server{
+		Addr:    cfg.ListenAddr,
+		Handler: mux,
 	}
 
-	log.Printf("enqueueing %d demo jobs...", len(types)*3)
-	for i := 0; i < 3; i++ {
-		for _, t := range types {
-			id, err := st.Enqueue(ctx, t, []byte(payloads[t]), 5, cfg.MaxAttempts)
-			if err != nil {
-				log.Printf("enqueue error: %v", err)
-				continue
-			}
-			log.Printf("enqueued job %d (%s)", id, t)
-		}
+	// Graceful shutdown on SIGINT/SIGTERM.
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		log.Println("shutting down...")
+
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownDrain)
+		defer shutdownCancel()
+
+		poolCancel()
+		<-pool.Done()
+
+		srv.Shutdown(shutdownCtx)
+	}()
+
+	log.Printf("listening on %s", cfg.ListenAddr)
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		log.Fatalf("server: %v", err)
 	}
-
-	// Let the pool process jobs for a while, then stop.
-	log.Println("workers running for 15 seconds...")
-	time.Sleep(15 * time.Second)
-
-	pool.Stop()
-	<-pool.Done()
-	log.Println("all workers stopped")
+	log.Println("server stopped")
 }
