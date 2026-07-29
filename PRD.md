@@ -341,3 +341,72 @@ All configurable via `.env`, loaded with `godotenv`. Documented in `.env.example
 | `RETRY_BASE_MS`           | `1000`  | Base delay for exponential backoff (ms)           |
 | `RETRY_CAP_MS`            | `60000` | Maximum backoff delay (ms)                        |
 | `STATS_WINDOW_MINUTES`    | `5`     | Sliding window for throughput/failure rate stats  |
+
+## 13. Fix and feature plan
+
+### 13.1 Job type payload drafts
+
+**Files:** `web/src/components/JobForm.tsx`
+
+- [ ] Define default JSON for each job type: `send_email`, `webhook_delivery`, `generate_report`.
+- [ ] Use `http://localhost:3000/webhook` as the webhook example URL.
+- [ ] Store a separate editable payload draft per job type in component state.
+- [ ] When selecting another type, display its saved draft.
+- [ ] When switching back, restore the user's previous edits instead of resetting them.
+- [ ] Keep parsing the active payload with `JSON.parse` before enqueueing.
+
+### 13.2 Always-visible and refreshed stats
+
+**Files:** `web/src/components/StatsChart.tsx`, `web/src/components/JobForm.tsx`, `web/src/components/JobTable.tsx`, `web/src/components/DeadLetterView.tsx`
+
+- [ ] Always render Pending, Running, Success, Failed, Dead, and Total cards.
+- [ ] Display `0` while loading or when the API returns an empty stats object.
+- [ ] Keep the last successful data when a later polling request fails.
+- [ ] Display a small loading or error message without replacing the cards.
+- [ ] Keep the existing 5-second polling interval.
+- [ ] Allow polling to pause when the browser tab is hidden.
+- [ ] Immediately invalidate and refresh the `stats` query after enqueue, retry, delete, and delete-all-dead.
+- [ ] Keep existing polling for the job table and dead-letter table.
+- [ ] Do not add a dashboard webhook, SSE, or WebSocket.
+
+### 13.3 Backend tests
+
+All tests use Go's standard `testing` and `httptest` packages. No new dependencies.
+
+#### 13.3.1 API integration test
+
+**New file:** `internal/api/handlers_test.go`
+
+- [ ] Read `TEST_DATABASE_URL`; skip the test when it is not set.
+- [ ] Never use the regular `DATABASE_URL`.
+- [ ] Run migrations against the dedicated test database.
+- [ ] Start the API handler using `httptest`.
+- [ ] Test enqueueing a job, listing jobs, and reading stats.
+- [ ] Clean up the test job after the test.
+
+#### 13.3.2 Retry backoff unit test
+
+**New file:** `internal/worker/retry_test.go`
+
+- [ ] Table-driven test for `FullJitterDelay`.
+- [ ] Verify delay is never negative.
+- [ ] Verify delay respects the exponential upper bound.
+- [ ] Verify the configured cap is enforced for large attempt counts.
+
+#### 13.3.3 Webhook unit test
+
+**New file:** `internal/jobtypes/webhook_delivery_test.go`
+
+- [ ] Use `httptest.Server` as the receiver.
+- [ ] Verify the handler sends an HTTP POST with the configured body and `Content-Type: application/json`.
+- [ ] Verify a 2xx response is accepted.
+- [ ] Verify a non-2xx response returns an error.
+- [ ] No request hits a public third-party service.
+
+### 13.4 Verification
+
+- [ ] `gofmt -l .` produces no output.
+- [ ] `go vet ./...` is clean.
+- [ ] `go test ./...` passes (integration test skips without `TEST_DATABASE_URL`).
+- [ ] `npm run build` in `web/` completes without errors.
+- [ ] `TEST_DATABASE_URL="..." go test ./internal/api -run TestAPIIntegration` passes.
