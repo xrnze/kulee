@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listJobs } from "./lib/api";
 import JobTable from "./components/JobTable";
 import JobForm from "./components/JobForm";
@@ -7,6 +7,7 @@ import StatsChart from "./components/StatsChart";
 
 export default function App() {
   const [status, setStatus] = useState("");
+  const queryClient = useQueryClient();
   const {
     data: jobsData,
     isLoading: jobsLoading,
@@ -18,6 +19,8 @@ export default function App() {
     queryFn: () => listJobs(0, 50, status),
     refetchInterval: 5000,
   });
+
+  const invalidateStats = () => queryClient.invalidateQueries({ queryKey: ["stats"] });
 
   return (
     <div className="min-h-screen bg-neutral-200 px-3 py-3 font-sans text-black sm:px-6 sm:py-6">
@@ -50,7 +53,7 @@ export default function App() {
             </h2>
             <p className="font-mono text-xs">POST /api/jobs</p>
           </div>
-          <JobForm onEnqueued={() => void refetchJobs()} />
+          <JobForm onEnqueued={() => { void refetchJobs(); invalidateStats(); }} />
         </section>
 
         <StatsChart />
@@ -68,7 +71,7 @@ export default function App() {
             isLoading={jobsLoading}
             error={jobsError}
             onStatusChange={setStatus}
-            onAction={() => void refetchJobs()}
+            onAction={() => { void refetchJobs(); invalidateStats(); }}
           />
         </section>
       </main>

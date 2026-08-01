@@ -6,12 +6,21 @@ interface Props {
   onEnqueued: () => void;
 }
 
+const DEFAULTS: Record<string, string> = {
+  send_email: '{"to":"user@example.com","subject":"Hello","body":"Test"}',
+  webhook_delivery: '{"url":"http://localhost:3000/webhook","body":"{\\"hello\\":\\"world\\"}","timeout_seconds":10}',
+  generate_report: '{"rows":100,"output_format":"csv"}',
+};
+
 const fieldClass =
   "h-11 w-full rounded-none border-2 border-black bg-white px-3 font-mono text-sm text-black placeholder:text-neutral-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black";
 
 export default function JobForm({ onEnqueued }: Props) {
+  const [drafts, setDrafts] = useState<Record<string, string>>(DEFAULTS);
   const [type, setType] = useState("send_email");
-  const [payload, setPayload] = useState('{"to":"user@example.com","subject":"Hello","body":"Test"}');
+
+  const payload = drafts[type] ?? "";
+  const setPayload = (v: string) => setDrafts((prev) => ({ ...prev, [type]: v }));
 
   const mutation = useMutation({
     mutationFn: () => enqueueJob(type, JSON.parse(payload)),
@@ -31,7 +40,10 @@ export default function JobForm({ onEnqueued }: Props) {
         <select
           value={type}
           onChange={(event) => {
-            setType(event.target.value);
+            const next = event.target.value;
+            // Save current draft, load next type's draft
+            setDrafts((prev) => ({ ...prev, [type]: payload }));
+            setType(next);
             mutation.reset();
           }}
           className={fieldClass}
