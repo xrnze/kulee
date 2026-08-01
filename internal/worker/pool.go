@@ -21,13 +21,15 @@ type JobFunc func(context.Context, string, json.RawMessage) error
 // Each worker runs in its own goroutine. Panics in a handler are caught
 // so a single bad job never takes down the pool or its workers.
 type Pool struct {
-	store   *store.Store
-	handler JobFunc
-	wg      sync.WaitGroup
-	cfg     Config
-	ctx     context.Context
-	cancel  context.CancelFunc
-	done    chan struct{}
+	store       *store.Store
+	handler     JobFunc
+	wg          sync.WaitGroup
+	cfg         Config
+	claimCtx    context.Context
+	cancelClaim context.CancelFunc
+	jobCtx      context.Context
+	cancelJobs  context.CancelFunc
+	done        chan struct{}
 }
 
 // Config holds worker-pool-specific parameters.
@@ -42,14 +44,20 @@ type Config struct {
 
 // NewPool starts numWorkers goroutines claiming from the store.
 func NewPool(ctx context.Context, s *store.Store, handler JobFunc, cfg Config) *Pool {
-	ctx, cancel := context.WithCancel(ctx)
+	// claimCtx gates new claims; jobCtx gates in-flight jobs. They are
+	// separate so a drain (Stop) can stop claiming without aborting work
+	// that is already running.
+	claimCtx, cancelClaim := context.WithCancel(ctx)
+	jobCtx, cancelJobs := context.WithCancel(ctx)
 	p := &Pool{
-		store:   s,
-		handler: handler,
-		cfg:     cfg,
-		ctx:     ctx,
-		cancel:  cancel,
-		done:    make(chan struct{}),
+		store:       s,
+		handler:     handler,
+		cfg:         cfg,
+		claimCtx:    claimCtx,
+		cancelClaim: cancelClaim,
+		jobCtx:      jobCtx,
+		cancelJobs:  cancelJobs,
+		done:        make(chan struct{}),
 	}
 
 	for i := 0; i < cfg.WorkerCount; i++ {
@@ -65,11 +73,18 @@ func NewPool(ctx context.Context, s *store.Store, handler JobFunc, cfg Config) *
 	return p
 }
 
-// Stop shuts down the pool. Workers finish their current job (if any)
-// then exit. In-flight jobs that exceed ShutdownDrain are orphaned and
-// will be reclaimed by the reaper after their lease expires.
+// Stop stops the pool from claiming new jobs. Workers finish the job
+// they are currently running (if any) and then exit; in-flight jobs are
+// left alone. Call Abort to cancel in-flight jobs, e.g. after a drain
+// deadline passes.
 func (p *Pool) Stop() {
-	p.cancel()
+	p.cancelClaim()
+}
+
+// Abort cancels the contexts of all in-flight jobs. Handlers observe the
+// cancellation and stop; workers exit once their current job returns.
+func (p *Pool) Abort() {
+	p.cancelJobs()
 }
 
 // Done returns a channel that closes when all workers have stopped.
@@ -85,13 +100,13 @@ func (p *Pool) worker(id int) {
 
 	for {
 		select {
-		case <-p.ctx.Done():
+		case <-p.claimCtx.Done():
 			log.Printf("worker %d: shutting down", id)
 			return
 		default:
 		}
 
-		job, err := p.store.Claim(p.ctx, workerID, p.cfg.AgingDivisor, p.cfg.LeaseDuration)
+		job, err := p.store.Claim(p.claimCtx, workerID, p.cfg.AgingDivisor, p.cfg.LeaseDuration)
 		if err != nil {
 			log.Printf("worker %d: claim error: %v", id, err)
 			time.Sleep(500 * time.Millisecond)
@@ -104,10 +119,11 @@ func (p *Pool) worker(id int) {
 
 		log.Printf("worker %d: claimed job %d (%s)", id, job.ID, job.Type)
 
-		// Run job with heartbeat loop in a sub-context.
-		jobCtx, jobCancel := context.WithCancel(p.ctx)
+		// Run job with heartbeat loop in a sub-context of the job context,
+		// not the claim context, so a drain does not abort in-flight work.
+		jobCtx, jobCancel := context.WithCancel(p.jobCtx)
 		heartbeatDone := make(chan struct{})
-		go p.heartbeat(jobCtx, heartbeatDone, id, job.ID, workerID)
+		go p.heartbeat(jobCtx, heartbeatDone, id, job.ID, workerID, jobCancel)
 
 		err = p.safeExecute(jobCtx, id, job)
 
@@ -131,8 +147,11 @@ func (p *Pool) safeExecute(ctx context.Context, id int, job *store.Job) (err err
 
 // heartbeat renews the lease on the claimed job until the job completes
 // or the context is canceled. Runs every LEASE_DURATION / 3.
+// If renewal fails (the worker can no longer prove it owns the lease,
+// e.g. the job was reaped and re-claimed), it cancels the job context so
+// the handler stops doing work it cannot commit.
 // Closes done when the heartbeat loop exits.
-func (p *Pool) heartbeat(ctx context.Context, done chan<- struct{}, workerID int, jobID int64, lockedBy string) {
+func (p *Pool) heartbeat(ctx context.Context, done chan<- struct{}, workerID int, jobID int64, lockedBy string, cancel context.CancelFunc) {
 	defer close(done)
 
 	tick := time.NewTicker(p.cfg.LeaseDuration / 3)
@@ -145,7 +164,8 @@ func (p *Pool) heartbeat(ctx context.Context, done chan<- struct{}, workerID int
 		case <-tick.C:
 			err := p.store.Renew(ctx, jobID, lockedBy, p.cfg.LeaseDuration)
 			if err != nil {
-				log.Printf("worker %d: heartbeat failed for job %d: %v — canceling", workerID, jobID, err)
+				log.Printf("worker %d: heartbeat failed for job %d: %v, canceling job", workerID, jobID, err)
+				cancel()
 				return
 			}
 		}
@@ -164,9 +184,11 @@ func (p *Pool) handleResult(workerID int, job *store.Job, execErr error, lockedB
 		return
 	}
 
-	// Mark as failed; the store decides dead vs pending+backoff.
+	// Mark as failed; the store decides dead vs pending+backoff. Fenced on
+	// lockedBy so a worker that lost its lease cannot stomp the new owner's
+	// row if the job was reaped and re-claimed.
 	backoff := FullJitterDelay(job.Attempts, p.cfg.RetryBase, p.cfg.RetryCap)
-	err := p.store.MarkFailed(ctx, job.ID, execErr.Error(), job.Attempts, p.cfg.MaxAttempts, backoff)
+	err := p.store.MarkFailed(ctx, job.ID, lockedBy, execErr.Error(), job.Attempts, p.cfg.MaxAttempts, backoff)
 	if err != nil {
 		log.Printf("worker %d: failed to mark job %d as failed: %v", workerID, job.ID, err)
 	}

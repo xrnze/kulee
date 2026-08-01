@@ -28,6 +28,11 @@ func getTestStore(t *testing.T) *store.Store {
 	if err := store.RunMigrations(ctx, db); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}
+	// Claims pick jobs by ordering, so the table must start empty. Run DB
+	// packages serially (go test -p 1 ./...) since they share one test DB.
+	if _, err := db.ExecContext(ctx, "TRUNCATE jobs RESTART IDENTITY"); err != nil {
+		t.Fatalf("truncate jobs: %v", err)
+	}
 	return store.New(db)
 }
 
@@ -82,9 +87,16 @@ func TestAPIIntegration(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// Clean up: mark the job as dead, then delete via API.
+	// Clean up: claim the job as a worker, mark it dead, then delete via API.
 	ctx := context.Background()
-	if err := s.MarkFailed(ctx, jobResp.ID, "test cleanup", 1, 1, 0); err != nil {
+	claimed, err := s.Claim(ctx, "test-worker", 600, 30*time.Second)
+	if err != nil {
+		t.Fatalf("claim for cleanup: %v", err)
+	}
+	if claimed == nil {
+		t.Fatalf("expected to claim job %d for cleanup", jobResp.ID)
+	}
+	if err := s.MarkFailed(ctx, jobResp.ID, "test-worker", "test cleanup", 1, 1, 0); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	}
 	req, err := http.NewRequest("DELETE", server.URL+"/api/jobs/"+strconv.FormatInt(jobResp.ID, 10), nil)

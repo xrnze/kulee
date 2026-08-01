@@ -9,7 +9,10 @@ import (
 // MarkFailed transitions a job after a failure. If attempts >= max_attempts
 // the job becomes 'dead'; otherwise it reverts to 'pending' with a backoff
 // delay in run_after. The caller should compute the backoff delay.
-func (s *Store) MarkFailed(ctx context.Context, jobID int64, lastError string, attempts, maxAttempts int, backoff time.Duration) error {
+// The update is fenced on locked_by so a worker that lost its lease (job
+// reaped and possibly re-claimed by another worker) cannot modify the row
+// the new owner is now processing.
+func (s *Store) MarkFailed(ctx context.Context, jobID int64, workerID, lastError string, attempts, maxAttempts int, backoff time.Duration) error {
 	newStatus := "pending"
 	if attempts >= maxAttempts {
 		newStatus = "dead"
@@ -30,8 +33,8 @@ func (s *Store) MarkFailed(ctx context.Context, jobID int64, lastError string, a
 		     locked_until = NULL,
 		     last_error = $3,
 		     updated_at = NOW()
-		 WHERE id = $4 AND (status = 'running' OR status = 'pending')`,
-		newStatus, runAfter, lastError, jobID,
+		 WHERE id = $4 AND locked_by = $5 AND (status = 'running' OR status = 'pending')`,
+		newStatus, runAfter, lastError, jobID, workerID,
 	)
 	if err != nil {
 		return fmt.Errorf("mark failed: %w", err)

@@ -114,8 +114,17 @@ func main() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownDrain)
 		defer shutdownCancel()
 
-		poolCancel()
-		<-pool.Done()
+		// Stop claiming new jobs; in-flight jobs get to finish.
+		pool.Stop()
+
+		select {
+		case <-pool.Done():
+			log.Println("drain: all in-flight jobs finished")
+		case <-shutdownCtx.Done():
+			log.Println("drain deadline exceeded, aborting remaining jobs")
+			pool.Abort()
+			<-pool.Done()
+		}
 
 		srv.Shutdown(shutdownCtx)
 	}()

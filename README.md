@@ -78,6 +78,19 @@ with HMR.
 
    This serves the SPA on `http://localhost:5173` with API proxy to `:8080`.
 
+### Testing
+
+Unit and integration tests. Integration tests hit a real Postgres and skip
+when `TEST_DATABASE_URL` is unset; point it at a dedicated test database:
+
+```
+TEST_DATABASE_URL=postgres://user:pass@localhost:5432/kulee_test?sslmode=disable \
+  go test -p 1 ./...
+```
+
+`-p 1` runs packages serially because the DB-backed packages share one test
+database and each truncates the `jobs` table before its tests run.
+
 5. Open `http://localhost:5173` (or `http://localhost:8080` for production build).
 
 ## Configuration

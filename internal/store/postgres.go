@@ -44,6 +44,19 @@ func OpenDB(dsn string) (*sql.DB, error) {
 
 // RunMigrations executes the 0001_init.sql migration.
 func RunMigrations(ctx context.Context, db *sql.DB) error {
+	// Serialize concurrent migration runs (parallel tests, multiple server
+	// instances starting at once): CREATE TABLE IF NOT EXISTS races with
+	// concurrent identical DDL and can fail on a unique-constraint check.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration tx: %w", err)
+	}
+	defer tx.Rollback() // no-op if committed
+
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(717101)"); err != nil {
+		return fmt.Errorf("lock migration: %w", err)
+	}
+
 	q := `
 	CREATE TABLE IF NOT EXISTS jobs (
 		id           BIGSERIAL PRIMARY KEY,
@@ -63,9 +76,11 @@ func RunMigrations(ctx context.Context, db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_jobs_status      ON jobs (status);
 	CREATE INDEX IF NOT EXISTS idx_jobs_locked_until ON jobs (locked_until);
 	CREATE INDEX IF NOT EXISTS idx_jobs_created_at   ON jobs (created_at);`
-	_, err := db.ExecContext(ctx, q)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, q); err != nil {
 		return fmt.Errorf("run migration: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration: %w", err)
 	}
 	return nil
 }
