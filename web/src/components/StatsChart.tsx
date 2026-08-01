@@ -41,7 +41,7 @@ export default function StatsChart() {
 
       <div
         aria-busy={isLoading}
-        className="grid grid-cols-2 gap-px border-2 border-black bg-black sm:grid-cols-3 lg:grid-cols-6"
+        className="grid grid-cols-2 gap-0.5 border-2 border-black bg-black sm:grid-cols-3 lg:grid-cols-6"
       >
         {metrics.map(({ label, count }, index) => (
           <div
