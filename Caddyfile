@@ -1,0 +1,13 @@
+# Kulee edge proxy: / -> web (SPA), /api and /health -> api (Go).
+# Local HTTP build: add a site address (e.g. jobs.example.com) for automatic HTTPS.
+:80 {
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+	handle /health {
+		reverse_proxy api:8080
+	}
+	handle {
+		reverse_proxy web:80
+	}
+}

@@ -34,49 +34,48 @@ between API, workers, and reaper. No separate message broker (Redis,
 RabbitMQ, Kafka). This is a deliberate simplicity choice for a portfolio
 project.
 
-The Go server serves both the API (`/api/*`) and the React SPA static
-files (`web/dist/`) on a single port. Same origin, no CORS configuration
-needed. In dev, Vite proxies `/api` to the Go server on a different port
-with HMR.
+Deployment is a four-service stack on a single Docker bridge network: the
+Go API, an nginx static server for the SPA, Postgres (internal-only, no
+host ports), and a Caddy reverse proxy in front of both the API and the
+frontend. The proxy is the only service exposed to the host, so the app
+stays same-origin and needs no CORS configuration. In dev, Vite proxies
+`/api` to the proxy with HMR.
 
 ## Quick Start
 
 ### Prerequisites
 
-- Go 1.24+
-- Node.js 20+
-- PostgreSQL 16+
+- Docker with Docker Compose
+- Go 1.24+ and Node.js 20+ (only for local dev and tests)
 
 ### Setup
 
-1. Clone the repo and enter the directory.
+Run everything with one command:
 
-2. Create a `.env` file from the example:
+```
+cp .env.example .env
+docker compose up --build
+```
 
-   ```
-   cp .env.example .env
-   ```
+This builds and starts the whole stack on a private Docker network: Caddy
+(edge proxy) -> `http://localhost:8080`, Go API (internal), nginx static
+server (internal), and Postgres (internal, no host port). Migrations run
+automatically on API startup.
 
-   Edit `.env` to set `DATABASE_URL` to your Postgres connection string.
+For close-in development, run the Go API and Vite dev server directly:
 
-3. Start the Go server:
+```
+# terminal 1: postgres + proxy only, or the full stack
+docker compose up --build db proxy
 
-   ```
-   go run ./cmd/server
-   ```
+# terminal 2: Go API on :8080 (needs a reachable Postgres)
+go run ./cmd/server
 
-   This runs migrations on startup, starts the worker pool and reaper, and
-   serves both the API and the frontend on `http://localhost:8080`.
-
-4. In a separate terminal, start the frontend dev server (optional, for HMR):
-
-   ```
-   cd web
-   npm install
-   npm run dev
-   ```
-
-   This serves the SPA on `http://localhost:5173` with API proxy to `:8080`.
+# terminal 3: Vite dev server with HMR, API proxied via localhost:8080
+cd web
+npm install
+npm run dev
+```
 
 ### Testing
 
@@ -91,7 +90,7 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/kulee_test?sslmode=disable
 `-p 1` runs packages serially because the DB-backed packages share one test
 database and each truncates the `jobs` table before its tests run.
 
-5. Open `http://localhost:5173` (or `http://localhost:8080` for production build).
+Open `http://localhost:5173` (Vite dev) or `http://localhost:8080` (production build via the proxy).
 
 ## Configuration
 
@@ -101,7 +100,7 @@ a `.env` file in the project root.
 | Variable                  | Default | Description                                      |
 |---------------------------|---------|--------------------------------------------------|
 | `DATABASE_URL`            | —       | Postgres connection string (required)             |
-| `LISTEN_ADDR`             | `:8080` | API + static file listen address                  |
+| `LISTEN_ADDR`             | `:8080` | API listen address                                 |
 | `WORKER_COUNT`            | `4`     | Number of worker goroutines in the pool           |
 | `LEASE_DURATION_SECONDS`  | `30`    | How long a claim lease lasts before expiry        |
 | `SHUTDOWN_DRAIN_SECONDS`  | `60`    | Max time to wait for in-flight jobs on SIGTERM    |
@@ -151,12 +150,14 @@ kulee/
 │   │   │   └── DeadLetterView.tsx
 │   │   └── lib/
 │   │       └── api.ts           # fetch wrappers, TanStack Query hooks
-│   ├── vite.config.ts           # dev proxy to Go :8080
+│   ├── vite.config.ts           # dev proxy to localhost:8080
+│   ├── Dockerfile               # multi-stage SPA build (node -> nginx)
 │   └── package.json
 ├── scripts/
 │   └── loadtest.sh              # vegeta-based load test
-├── Dockerfile                   # multi-stage build
-├── fly.toml                     # Fly.io deployment config
+├── Dockerfile                   # Go API-only build
+├── docker-compose.yaml          # db + api + web + proxy stack
+├── Caddyfile                    # edge reverse proxy config
 ├── .env.example                 # documents all configurable env vars
 ├── PRD.md                       # design document
 └── README.md                    # this file
@@ -243,12 +244,14 @@ Offset pagination is simpler but breaks when new rows are inserted before
 the current page. The cursor is the last job's ID, which is monotonic and
 stable.
 
-### Single-port, same-origin serving vs separate services
+### Reverse proxy vs single-port serving
 
-The Go server serves both the API and the React SPA on the same port.
-This avoids CORS configuration, simplifies deployment, and is the standard
-pattern for small Go + frontend projects. Add a reverse proxy (nginx,
-Caddy) in front when scaling.
+The API is deliberately API-only; it does not serve the SPA. A Caddy reverse
+proxy fronts both the API (`/api/*`, `/health`) and the nginx static server
+for the SPA (`/`). Routing both through the proxy keeps the app same-origin
+(no CORS needed) while letting the frontend and API deploy and scale
+independently. Postgres is internal-only, reachable only from the Docker
+bridge network.
 
 ## Demo Job Types
 
@@ -282,19 +285,29 @@ This runs attacks against `POST /api/jobs` at worker pool sizes 1, 4, and
 
 ## Deploy
 
-### Fly.io
+### Docker Compose (recommended)
+
+Build and run the full stack:
 
 ```bash
-fly launch --from fly.toml
-fly secrets set DATABASE_URL=<your-postgres-dsn>
-fly deploy
+docker compose up --build -d
 ```
 
-### Docker
+Caddy exposes `http://<host>:8080`; the API, frontend, and Postgres stay on
+the internal network.
+
+For production HTTPS on a VPS, point a DNS A record at the host and add the
+hostname to the top of `Caddyfile` (e.g. `jobs.example.com {`); Caddy then
+provisions and renews a Let's Encrypt certificate automatically.
+
+### Legacy single-container
+
+The `Dockerfile` builds only the Go API. To run it standalone you must
+provide Postgres separately:
 
 ```bash
-docker build -t kulee .
-docker run -p 8080:8080 -e DATABASE_URL=<your-postgres-dsn> kulee
+docker build -t kulee-api .
+docker run -p 8080:8080 -e DATABASE_URL=<your-postgres-dsn> kulee-api
 ```
 
 ## License

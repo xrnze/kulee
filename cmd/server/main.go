@@ -96,8 +96,10 @@ func main() {
 	mux := http.NewServeMux()
 	api.NewHandler(st, cfg.StatsWindow).Register(mux)
 
-	// Serve static frontend from web/dist.
-	mux.Handle("GET /", http.FileServer(http.Dir("web/dist")))
+	// Health check for orchestration and the reverse proxy.
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
 	srv := &http.Server{
 		Addr:    cfg.ListenAddr,
