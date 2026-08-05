@@ -4,3 +4,7 @@
   --font-sans: Arial, Helvetica, sans-serif;
   --font-mono: "Courier New", Courier, monospace;
 }
+
+button:not(:disabled) {
+  cursor: pointer;
+}
