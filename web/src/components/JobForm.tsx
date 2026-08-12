@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { enqueueJob } from "../lib/api";
+import { enqueueJob, Job } from "../lib/api";
 
 interface Props {
-  onEnqueued: () => void;
+  onEnqueued: (job: Job) => void;
 }
 
 const DEFAULTS: Record<string, string> = {
@@ -71,7 +71,7 @@ export default function JobForm({ onEnqueued }: Props) {
       <button
         type="submit"
         disabled={mutation.isPending}
-        className="h-11 border-2 border-black bg-black px-6 text-sm font-black text-white hover:bg-white hover:text-black focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black disabled:cursor-not-allowed disabled:bg-neutral-400 disabled:text-neutral-800"
+        className="h-11 border-2 border-black bg-black px-6 text-sm font-black text-white hover:bg-white hover:text-black focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:cursor-not-allowed disabled:bg-neutral-400 disabled:text-neutral-800"
       >
         {mutation.isPending ? "ENQUEUING" : "ENQUEUE"}
       </button>

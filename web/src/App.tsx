@@ -1,13 +1,18 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listJobs } from "./lib/api";
 import JobTable from "./components/JobTable";
 import JobForm from "./components/JobForm";
 import StatsChart from "./components/StatsChart";
 
+const PAGE_SIZE = 10;
+
 export default function App() {
   const [status, setStatus] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const [history, setHistory] = useState<number[]>([]);
   const queryClient = useQueryClient();
+
   const {
     data: jobsData,
     isLoading: jobsLoading,
@@ -15,12 +20,39 @@ export default function App() {
     error: jobsError,
     refetch: refetchJobs,
   } = useQuery({
-    queryKey: ["jobs", status],
-    queryFn: () => listJobs(0, 50, status),
+    queryKey: ["jobs", status, cursor],
+    queryFn: () => listJobs(cursor, PAGE_SIZE, status),
     refetchInterval: 5000,
   });
 
   const invalidateStats = () => queryClient.invalidateQueries({ queryKey: ["stats"] });
+
+  const changeStatus = (next: string) => {
+    setStatus(next);
+    setCursor(0);
+    setHistory([]);
+  };
+
+  const goNext = () => {
+    const next = jobsData?.next_cursor ?? 0;
+    if (!next) return;
+    setHistory((prev) => [...prev, cursor]);
+    setCursor(next);
+  };
+
+  const goPrev = () => {
+    const last = history[history.length - 1] ?? 0;
+    setHistory(history.slice(0, -1));
+    setCursor(last);
+  };
+
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<number | null>(null);
+  const notify = (msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 4000);
+  };
 
   return (
     <div className="min-h-screen bg-neutral-200 px-3 py-3 font-sans text-black sm:px-6 sm:py-6">
@@ -53,7 +85,7 @@ export default function App() {
             </h2>
             <p className="font-mono text-xs">POST /api/jobs</p>
           </div>
-          <JobForm onEnqueued={() => { void refetchJobs(); invalidateStats(); }} />
+          <JobForm onEnqueued={(job) => { void refetchJobs(); invalidateStats(); notify(`ENQUEUED #${job.id}`); }} />
         </section>
 
         <StatsChart />
@@ -70,11 +102,25 @@ export default function App() {
             status={status}
             isLoading={jobsLoading}
             error={jobsError}
-            onStatusChange={setStatus}
+            hasMore={jobsData?.has_more ?? false}
+            canPrev={history.length > 0}
+            onStatusChange={changeStatus}
+            onNext={goNext}
+            onPrev={goPrev}
             onAction={() => { void refetchJobs(); invalidateStats(); }}
+            notify={notify}
           />
         </section>
       </main>
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-4 right-4 z-40 border-2 border-black bg-white px-4 py-3 font-mono text-sm font-bold"
+        >
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

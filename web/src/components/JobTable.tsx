@@ -6,8 +6,13 @@ interface Props {
   status: string;
   isLoading: boolean;
   error: Error | null;
+  hasMore: boolean;
+  canPrev: boolean;
   onStatusChange: (status: string) => void;
+  onNext: () => void;
+  onPrev: () => void;
   onAction: () => void;
+  notify: (msg: string) => void;
 }
 
 const FILTERS = [
@@ -35,12 +40,26 @@ export default function JobTable({
   status,
   isLoading,
   error,
+  hasMore,
+  canPrev,
   onStatusChange,
+  onNext,
+  onPrev,
   onAction,
+  notify,
 }: Props) {
-  const retry = useMutation({ mutationFn: retryJob, onSuccess: onAction });
-  const remove = useMutation({ mutationFn: deleteJob, onSuccess: onAction });
-  const purge = useMutation({ mutationFn: deleteAllDead, onSuccess: onAction });
+  const retry = useMutation({
+    mutationFn: retryJob,
+    onSuccess: (job) => { notify(`RETRIED #${job.id}`); onAction(); },
+  });
+  const remove = useMutation({
+    mutationFn: deleteJob,
+    onSuccess: (_v, id) => { notify(`DELETED #${id}`); onAction(); },
+  });
+  const purge = useMutation({
+    mutationFn: deleteAllDead,
+    onSuccess: (res) => { notify(`DELETED ${res.deleted} DEAD JOB${res.deleted === 1 ? "" : "S"}`); onAction(); },
+  });
   const actionError = retry.error ?? remove.error ?? purge.error;
 
   return (
@@ -55,7 +74,7 @@ export default function JobTable({
                 type="button"
                 aria-pressed={active}
                 onClick={() => onStatusChange(filter.value)}
-                className={`h-10 border-2 border-black px-3 text-xs font-black first:ml-0 [&:not(:first-child)]:-ml-0.5 focus-visible:relative focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black ${
+                className={`h-10 border-2 border-black px-3 text-xs font-black first:ml-0 not-first:-ml-0.5 focus-visible:relative focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black ${
                   active ? "relative z-10 bg-black text-white" : "bg-white text-black hover:bg-neutral-200"
                 }`}
               >
@@ -81,12 +100,6 @@ export default function JobTable({
         )}
       </div>
 
-      {purge.data && (
-        <p aria-live="polite" className="mb-3 font-mono text-sm font-bold">
-          DELETED {purge.data.deleted} DEAD JOB{purge.data.deleted === 1 ? "" : "S"}
-        </p>
-      )}
-
       {actionError && (
         <p role="alert" className="mb-3 border-2 border-black p-3 font-mono text-sm font-bold">
           ACTION ERROR: {String(actionError)}
@@ -98,7 +111,8 @@ export default function JobTable({
           JOBS ERROR: {String(error)}
         </p>
       ) : (
-        <div className="overflow-x-auto border-2 border-black">
+        <>
+        <div className="scrollbar-hidden overflow-x-auto border-2 border-black">
           <table className="w-full min-w-[70rem] border-collapse text-left text-sm">
             <caption className="sr-only">Jobs in the queue</caption>
             <thead className="bg-black text-white">
@@ -201,6 +215,16 @@ export default function JobTable({
             </tbody>
           </table>
         </div>
+        <div className="mt-4 flex items-center justify-end gap-3">
+          <span className="font-mono text-xs font-bold">{isLoading ? "LOADING" : `${jobs.length} / PAGE`}</span>
+          <button type="button" onClick={onPrev} disabled={!canPrev} className={actionClass}>
+            PREV
+          </button>
+          <button type="button" onClick={onNext} disabled={!hasMore} className={actionClass}>
+            NEXT
+          </button>
+        </div>
+        </>
       )}
     </div>
   );

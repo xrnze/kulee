@@ -8,3 +8,13 @@
 button:not(:disabled) {
   cursor: pointer;
 }
+
+/* Hide the horizontal scrollbar on scrolling tables while keeping scroll.
+   Scroll still works via touch, trackpad, and shift+wheel. */
+.scrollbar-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
