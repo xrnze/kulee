@@ -21,7 +21,7 @@ claiming with `SELECT ... FOR UPDATE SKIP LOCKED`.
 
 ## Architecture
 
-```ts
+```
 Browser                              // React dashboard entry point
   → Caddy :8080                      // Production edge router
     → /api/* and /health → Go API    // API and health requests
@@ -54,7 +54,7 @@ stays same-origin and needs no CORS configuration. In dev, Vite proxies
 
 #### Happy path: enqueue, process, and complete
 
-```ts
+```
 Browser                              // User submits a job
   → Caddy /api/jobs                  // Routes API traffic in production
     → api.Handler.enqueueJob         // Decodes request and applies defaults
@@ -83,7 +83,7 @@ and conditionally mark successful work as `success`.
 
 #### Sad path: bad input, failure, retry, and recovery
 
-```ts
+```
 Browser or client                    // Untrusted request boundary
   → invalid JSON or missing type     // Request cannot be accepted
     → HTTP 400                       // Client receives a validation error
