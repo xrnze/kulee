@@ -21,25 +21,99 @@ claiming with `SELECT ... FOR UPDATE SKIP LOCKED`.
 
 ## Architecture
 
-```
-Client → API server (writes to Postgres, returns 202 immediately) →
-Postgres (jobs table, source of truth) ← Worker pool (claims via
-SKIP LOCKED, processes, updates status) + Reaper (sweeps expired leases
-back to pending) → Dashboard (SPA served from the same Go process,
-manual refresh via TanStack Query fetching /api/jobs).
+```ts
+Browser                              // React dashboard entry point
+  → Caddy :8080                      // Production edge router
+    → /api/* and /health → Go API    // API and health requests
+    → /                 → nginx      // Static frontend server
+                          → React    // Dashboard assets
+
+Go API → Postgres jobs table         // Durable source of truth
+                       ← Worker pool // Claims and processes jobs
+                       ← Reaper      // Recovers expired leases
 ```
 
-Key architectural decision: Postgres is the single coordination point
-between API, workers, and reaper. No separate message broker (Redis,
-RabbitMQ, Kafka). This is a deliberate simplicity choice for a portfolio
-project.
+Evidence: `docker-compose.yaml:17-47`, `Caddyfile:3-12`,
+`web/src/main.tsx:7-15`, `cmd/server/main.go:70-107`.
+
+The Go process contains the HTTP API, fixed-size worker pool, and reaper.
+Postgres is the single coordination point and source of truth for job state.
+Workers claim jobs with `SELECT ... FOR UPDATE SKIP LOCKED`; the reaper
+returns expired leases to `pending`. There is no separate message broker
+such as Redis, RabbitMQ, or Kafka. This is a deliberate simplicity choice
+for a portfolio project.
 
 Deployment is a four-service stack on a single Docker bridge network: the
 Go API, an nginx static server for the SPA, Postgres (internal-only, no
 host ports), and a Caddy reverse proxy in front of both the API and the
 frontend. The proxy is the only service exposed to the host, so the app
 stays same-origin and needs no CORS configuration. In dev, Vite proxies
-`/api` to the proxy with HMR.
+`/api` to the Go API with HMR.
+
+### End-to-end flows
+
+#### Happy path: enqueue, process, and complete
+
+```ts
+Browser                              // User submits a job
+  → Caddy /api/jobs                  // Routes API traffic in production
+    → api.Handler.enqueueJob         // Decodes request and applies defaults
+      → store.Store.Enqueue          // Inserts a pending job
+        → Postgres jobs table        // Durable source of truth
+      → HTTP 201                     // Returns the persisted job
+  → dashboard refresh                // Reloads jobs and stats
+
+worker.Pool.worker                   // Repeated worker claim loop
+  → store.Store.Claim                // Claims one eligible pending job
+    → FOR UPDATE SKIP LOCKED         // Prevents competing workers colliding
+      → status=running               // Sets lease and increments attempts
+  → worker.Pool.heartbeat            // Renews the lease while running
+    → store.Store.Renew              // Extends locked_until
+  → registered job handler           // Executes the selected job type
+    → store.Store.MarkSuccess        // Records success if ownership matches
+```
+
+Evidence: `Caddyfile:4-6`, `internal/api/handlers.go:73-108`,
+`internal/store/claim.go:22-35`, `internal/store/claim.go:37-109`,
+`internal/worker/pool.go:95-146`, `internal/store/deadletter.go:84-100`.
+
+The API acknowledges persistence first. Workers then independently claim
+pending jobs, execute the registered handler, renew the lease for long jobs,
+and conditionally mark successful work as `success`.
+
+#### Sad path: bad input, failure, retry, and recovery
+
+```ts
+Browser or client                    // Untrusted request boundary
+  → invalid JSON or missing type     // Request cannot be accepted
+    → HTTP 400                       // Client receives a validation error
+
+worker.Pool.worker                   // Job was accepted and claimed
+  → handler error or panic           // Execution did not complete
+    → worker.FullJitterDelay         // Calculates retry delay
+      → store.Store.MarkFailed       // Fenced failure update
+        → pending + run_after        // Retry later while attempts remain
+        → dead + last_error          // Stop after the attempt limit
+
+running job                          // Worker loses lease or process crashes
+  → lease expires                    // Heartbeat no longer renews it
+    → store.Store.Reap               // Reclaims the orphaned job
+      → status=pending               // Makes it claimable again
+        → another worker claims      // Job may execute again
+
+stale worker completion              // Old worker finishes after lease loss
+  → conditional update               // Ownership check does not match
+    → update rejected                // Current owner is protected
+```
+
+Evidence: `internal/api/handlers.go:73-98`, `internal/worker/pool.go:136-195`,
+`internal/worker/retry.go:13-19`, `internal/store/deadletter.go:9-47`,
+`internal/worker/pool.go:148-173`, `internal/store/claim.go:207-217`.
+
+Failures are handled as at-least-once processing, not exactly-once
+processing. A job may run again after a crash or lease loss, so external job
+side effects should be idempotent. Dead jobs can be manually retried or
+deleted from the dashboard.
 
 ## Quick Start
 
