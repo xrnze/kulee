@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Job, retryJob, deleteJob, deleteAllDead } from "../lib/api";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
   jobs: Job[];
@@ -48,17 +50,28 @@ export default function JobTable({
   onAction,
   notify,
 }: Props) {
+  const [confirmation, setConfirmation] = useState<
+    { kind: "all" } | { kind: "job"; id: number } | null
+  >(null);
   const retry = useMutation({
     mutationFn: retryJob,
     onSuccess: (job) => { notify(`RETRIED #${job.id}`); onAction(); },
   });
   const remove = useMutation({
     mutationFn: deleteJob,
-    onSuccess: (_v, id) => { notify(`DELETED #${id}`); onAction(); },
+    onSuccess: (_v, id) => {
+      setConfirmation(null);
+      notify(`DELETED #${id}`);
+      onAction();
+    },
   });
   const purge = useMutation({
     mutationFn: deleteAllDead,
-    onSuccess: (res) => { notify(`DELETED ${res.deleted} DEAD JOB${res.deleted === 1 ? "" : "S"}`); onAction(); },
+    onSuccess: (res) => {
+      setConfirmation(null);
+      notify(`DELETED ${res.deleted} DEAD JOB${res.deleted === 1 ? "" : "S"}`);
+      onAction();
+    },
   });
   const actionError = retry.error ?? remove.error ?? purge.error;
 
@@ -89,9 +102,8 @@ export default function JobTable({
             type="button"
             disabled={purge.isPending || jobs.length === 0}
             onClick={() => {
-              if (window.confirm("Delete all dead jobs? This cannot be undone.")) {
-                purge.mutate();
-              }
+              purge.reset();
+              setConfirmation({ kind: "all" });
             }}
             className={actionClass}
           >
@@ -194,9 +206,8 @@ export default function JobTable({
                           <button
                             type="button"
                             onClick={() => {
-                              if (window.confirm(`Delete dead job #${job.id}? This cannot be undone.`)) {
-                                remove.mutate(job.id);
-                              }
+                              remove.reset();
+                              setConfirmation({ kind: "job", id: job.id });
                             }}
                             disabled={remove.isPending}
                             className={actionClass}
@@ -226,6 +237,23 @@ export default function JobTable({
         </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmation !== null}
+        title={confirmation?.kind === "all" ? "Delete all dead jobs?" : `Delete dead job #${confirmation?.id ?? ""}?`}
+        description="This action cannot be undone."
+        confirmLabel="DELETE"
+        busy={confirmation?.kind === "all" ? purge.isPending : remove.isPending}
+        error={confirmation?.kind === "all" ? (purge.error ? String(purge.error) : null) : (remove.error ? String(remove.error) : null)}
+        onCancel={() => setConfirmation(null)}
+        onConfirm={() => {
+          if (confirmation?.kind === "all") {
+            purge.mutate();
+          } else if (confirmation?.kind === "job") {
+            remove.mutate(confirmation.id);
+          }
+        }}
+      />
     </div>
   );
 }
