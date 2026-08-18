@@ -9,6 +9,22 @@ button:not(:disabled) {
   cursor: pointer;
 }
 
+.kulee-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: min(calc(100% - 1.5rem), 32rem);
+  max-height: calc(100vh - 1.5rem);
+  margin: 0;
+  overflow: auto;
+  border: 2px solid #000;
+  transform: translate(-50%, -50%);
+}
+
+.kulee-dialog::backdrop {
+  background: rgb(0 0 0 / 64%);
+}
+
 /* Hide the horizontal scrollbar on scrolling tables while keeping scroll.
    Scroll still works via touch, trackpad, and shift+wheel. */
 .scrollbar-hidden {
