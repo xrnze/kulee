@@ -53,6 +53,12 @@ export async function retryJob(id: number): Promise<Job> {
   return res.json();
 }
 
+export async function cancelJob(id: number): Promise<Job> {
+  const res = await fetch(`${BASE}/jobs/${id}/cancel`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function deleteJob(id: number): Promise<void> {
   const res = await fetch(`${BASE}/jobs/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await res.text());

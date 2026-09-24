@@ -4,11 +4,18 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	_ "github.com/lib/pq"
 )
+
+// ErrJobNotFound indicates that a requested job does not exist.
+var ErrJobNotFound = errors.New("job not found")
+
+// ErrJobNotCancelable indicates that a job is already in a terminal state.
+var ErrJobNotCancelable = errors.New("job is not cancelable")
 
 // Job represents a persisted job row.
 type Job struct {

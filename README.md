@@ -113,7 +113,8 @@ Evidence: `internal/api/handlers.go:73-98`, `internal/worker/pool.go:136-195`,
 Failures are handled as at-least-once processing, not exactly-once
 processing. A job may run again after a crash or lease loss, so external job
 side effects should be idempotent. Dead jobs can be manually retried or
-deleted from the dashboard.
+deleted from the dashboard. Pending and running jobs can be canceled
+cooperatively; canceled jobs remain for inspection.
 
 ## Quick Start
 
@@ -180,10 +181,9 @@ a `.env` file in the project root.
 | `SHUTDOWN_DRAIN_SECONDS`  | `60`    | Max time to wait for in-flight jobs on SIGTERM    |
 | `REAPER_INTERVAL_SECONDS` | `5`     | How often the reaper sweeps expired leases        |
 | `AGING_DIVISOR_SECONDS`   | `600`   | Seconds of waiting = 1 effective priority point   |
-| `MAX_ATTEMPTS`            | `5`     | Global max retry attempts per job                 |
+| `MAX_ATTEMPTS`            | `5`     | Default and maximum retry budget per job          |
 | `RETRY_BASE_MS`           | `1000`  | Base delay for exponential backoff (ms)           |
 | `RETRY_CAP_MS`            | `60000` | Maximum backoff delay (ms)                        |
-| `STATS_WINDOW_MINUTES`    | `5`     | Sliding window for throughput/failure rate stats  |
 
 ## Project Structure
 
@@ -262,8 +262,8 @@ surprisingly simple.
 The dashboard refreshes on manual click and via TanStack Query's
 `refetchInterval`. SSE or WebSocket would give sub-second updates but
 add server-side complexity (connection tracking, reconnection handling).
-For a developer tool, a 5-second poll is pragmatic. Upgrade path: pass
-`refetchInterval: 5000` to the query, which is already done.
+For a developer tool, a 5-second poll is pragmatic. Queue metrics show the
+current count of every job status, not historical throughput or failure rate.
 
 ### At-least-once delivery, not exactly-once
 
@@ -360,6 +360,9 @@ This runs attacks against `POST /api/jobs` at worker pool sizes 1, 4, and
 ## Deploy
 
 ### Docker Compose (recommended)
+
+Kulee is designed for local or private-network use. It has no authentication
+or authorization, so do not expose the API directly to the public internet.
 
 Build and run the full stack:
 

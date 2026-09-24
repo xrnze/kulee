@@ -58,7 +58,13 @@ func TestMarkFailedFencedByWorker(t *testing.T) {
 		t.Fatalf("expected worker B to claim job %d", id)
 	}
 
-	// Worker A finishes late with an error; its MarkFailed must be rejected.
+	// Worker A finishes late; all lease mutations must be rejected.
+	if err := s.Renew(ctx, id, "worker-a", time.Second); err == nil {
+		t.Fatal("expected stale Renew to be rejected")
+	}
+	if err := s.MarkSuccess(ctx, id, "worker-a"); err == nil {
+		t.Fatal("expected stale MarkSuccess to be rejected")
+	}
 	if err := s.MarkFailed(ctx, id, "worker-a", "stale failure", 1, 5, time.Second); err == nil {
 		t.Fatal("expected stale MarkFailed to be rejected")
 	}
@@ -75,5 +81,51 @@ func TestMarkFailedFencedByWorker(t *testing.T) {
 	}
 	if job.LastError != nil {
 		t.Errorf("stale MarkFailed set last_error: %v", *job.LastError)
+	}
+}
+
+func TestCancelTransitionsPendingAndRunningJobs(t *testing.T) {
+	s := getTestStore(t)
+	ctx := context.Background()
+
+	pendingID, err := s.Enqueue(ctx, "send_email", []byte(`{}`), 1, 5)
+	if err != nil {
+		t.Fatalf("enqueue pending: %v", err)
+	}
+	pending, err := s.Cancel(ctx, pendingID)
+	if err != nil {
+		t.Fatalf("cancel pending: %v", err)
+	}
+	if pending.Status != "canceled" {
+		t.Fatalf("pending status = %q, want canceled", pending.Status)
+	}
+	again, err := s.Cancel(ctx, pendingID)
+	if err != nil {
+		t.Fatalf("repeat cancel: %v", err)
+	}
+	if again.Status != "canceled" {
+		t.Fatalf("repeat status = %q, want canceled", again.Status)
+	}
+
+	runningID, err := s.Enqueue(ctx, "send_email", []byte(`{}`), 1, 5)
+	if err != nil {
+		t.Fatalf("enqueue running: %v", err)
+	}
+	claimed, err := s.Claim(ctx, "worker-a", 600, time.Second)
+	if err != nil {
+		t.Fatalf("claim running: %v", err)
+	}
+	if claimed == nil || claimed.ID != runningID {
+		t.Fatalf("expected to claim running job %d", runningID)
+	}
+	running, err := s.Cancel(ctx, runningID)
+	if err != nil {
+		t.Fatalf("cancel running: %v", err)
+	}
+	if running.Status != "canceled" {
+		t.Fatalf("running status = %q, want canceled", running.Status)
+	}
+	if err := s.MarkSuccess(ctx, runningID, "worker-a"); err == nil {
+		t.Fatal("expected canceled job to reject stale success")
 	}
 }

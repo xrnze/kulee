@@ -42,7 +42,7 @@ design decisions before reading code.
 
 ## 4. Architecture
 
-Client → API server (writes to Postgres, returns 202 immediately) →
+Client → API server (writes to Postgres, returns 201 with the persisted job) →
 Postgres (jobs table, source of truth) ← Worker pool (claims via
 `SKIP LOCKED`, processes, updates status) + Reaper (sweeps expired leases
 back to `pending`) → Dashboard (SPA served from the same Go process,
@@ -120,11 +120,11 @@ says otherwise.
 | id             | bigserial   | PK                                              |
 | type           | text        | e.g. `send_email`, `webhook_delivery`, `generate_report` |
 | payload        | jsonb       | job-specific input                              |
-| status         | text        | pending / running / success / failed / dead      |
+| status         | text        | pending / running / success / failed / dead / canceled      |
 | priority       | int         | 1-10, higher = more urgent                      |
 | attempts       | int         | current attempt count (incremented at claim time)|
-| max_attempts   | int         | global default 5 from config                    |
-| locked_by      | text        | worker id owning the current claim (nullable)    |
+| max_attempts   | int         | per-job retry budget, defaulted and capped by config                    |
+| locked_by      | text        | opaque lease-owner token for the current claim (nullable)    |
 | locked_until   | timestamptz | lease expiry (nullable)                          |
 | run_after      | timestamptz | earliest time this job can be claimed (for retry backoff; nullable) |
 | created_at     | timestamptz | used for FIFO + aging calc                      |
@@ -197,25 +197,33 @@ UPDATE jobs SET status = 'pending', attempts = 0, last_error = NULL, run_after =
 WHERE id = $1 AND status = 'dead';
 ```
 
+**Cancellation**:
+`POST /api/jobs/:id/cancel` atomically changes `pending` or `running` to
+terminal `canceled`, clears the lease, and returns the job. Repeating the
+request for an already canceled job returns 200; completed, failed, or dead
+jobs return 409. Running handlers stop cooperatively when their next heartbeat
+observes the canceled state.
+
 ## 7. API surface
 
 | Method | Path                   | Purpose                                          |
 |--------|------------------------|---------------------------------------------------|
-| POST   | `/api/jobs`            | enqueue a job, returns 202 + job id               |
+| POST   | `/api/jobs`            | enqueue and persist a job, returns 201 + job      |
 | GET    | `/api/jobs`            | list jobs (cursor-paginated, filterable by status)|
 | GET    | `/api/jobs/:id`        | job detail                                        |
 | POST   | `/api/jobs/:id/retry`  | manually retry a dead-lettered job                |
+| POST   | `/api/jobs/:id/cancel` | cancel a pending or running job                   |
 | DELETE | `/api/jobs/:id`        | delete a dead-lettered job                        |
 | DELETE | `/api/jobs/dead`       | delete all dead-lettered jobs                     |
-| GET    | `/api/stats`           | queue depth, throughput, failure rate (sliding window) |
+| GET    | `/api/stats`           | current counts grouped by job status             |
 
-**Pagination**: composite cursor on `(created_at, id)`.
-`GET /api/jobs?status=pending&limit=50&cursor=2024-01-01T00:00:00Z,42`
-Response includes a `nextCursor` field.
+**Pagination**: ID-only cursor ordered by descending ID.
+`GET /api/jobs?status=pending&limit=50&cursor=42`
+Response includes a `next_cursor` field and `has_more` boolean.
 
-**Payload validation**: API server only validates `type` is non-empty and
-`payload` is valid JSON. Worker validates semantics and records errors in
-`last_error`.
+**Payload validation**: API rejects unknown types, invalid type-specific
+payloads, priorities outside 1-10, and retry budgets outside the configured
+range before persisting the job.
 
 ## 8. Demo job types
 
@@ -256,7 +264,7 @@ Files: `internal/config/config.go`, `.env.example`,
 - [x] Implement full-jitter retry backoff + `run_after` column
 - [x] Implement dead-letter transition after `max_attempts`
 - [x] Implement 3 demo job types with registry map
-- [x] Add `/api/stats` endpoint (DB sliding window)
+- [x] Add `/api/stats` endpoint (current status counts)
 
 **Step 3 — API + dashboard skeleton**
 Files: `internal/api/handlers.go`, `internal/api/stats.go`,
@@ -337,76 +345,34 @@ All configurable via `.env`, loaded with `godotenv`. Documented in `.env.example
 | `SHUTDOWN_DRAIN_SECONDS`  | `60`    | Max time to wait for in-flight jobs on SIGTERM    |
 | `REAPER_INTERVAL_SECONDS` | `5`     | How often the reaper sweeps expired leases        |
 | `AGING_DIVISOR_SECONDS`   | `600`   | Seconds of waiting = 1 effective priority point   |
-| `MAX_ATTEMPTS`            | `5`     | Global max retry attempts per job                 |
+| `MAX_ATTEMPTS`            | `5`     | Default and maximum retry budget per job          |
 | `RETRY_BASE_MS`           | `1000`  | Base delay for exponential backoff (ms)           |
 | `RETRY_CAP_MS`            | `60000` | Maximum backoff delay (ms)                        |
-| `STATS_WINDOW_MINUTES`    | `5`     | Sliding window for throughput/failure rate stats  |
 
-## 13. Fix and feature plan
+## 13. Release and feature plan
 
-### 13.1 Job type payload drafts
+### 13.1 Release corrections
 
-**Files:** `web/src/components/JobForm.tsx`
+- [x] Give every worker an ephemeral lease-owner token and fence renewal and terminal updates.
+- [x] Enforce registered job types, type-specific payload validation, priority bounds, and retry-budget bounds at enqueue.
+- [x] Enforce each job's stored retry budget when deciding whether it becomes dead-lettered.
+- [x] Report current counts for every status instead of labeling created-at counts as historical metrics.
+- [x] Align the API and docs on `201 Created` and ID-only cursors.
+- [x] Add a CI gate for Go checks, frontend build, and production image builds.
 
-- [ ] Define default JSON for each job type: `send_email`, `webhook_delivery`, `generate_report`.
-- [ ] Use `http://localhost:3000/webhook` as the webhook example URL.
-- [ ] Store a separate editable payload draft per job type in component state.
-- [ ] When selecting another type, display its saved draft.
-- [ ] When switching back, restore the user's previous edits instead of resetting them.
-- [ ] Keep parsing the active payload with `JSON.parse` before enqueueing.
+### 13.2 Next feature: cancellation
 
-### 13.2 Always-visible and refreshed stats
+- [x] Add `POST /api/jobs/:id/cancel`.
+- [x] Retain canceled jobs as a terminal status.
+- [x] Cancel pending jobs immediately and cancel running handlers cooperatively on heartbeat.
+- [x] Make repeated cancellation idempotent and reject other terminal states with `409 Conflict`.
+- [x] Add pending/running cancellation actions to the dashboard.
+- [x] Test stale lease fencing and cancellation transitions against Postgres.
 
-**Files:** `web/src/components/StatsChart.tsx`, `web/src/components/JobForm.tsx`, `web/src/components/JobTable.tsx`, `web/src/components/DeadLetterView.tsx`
+### 13.3 Verification
 
-- [ ] Always render Pending, Running, Success, Failed, Dead, and Total cards.
-- [ ] Display `0` while loading or when the API returns an empty stats object.
-- [ ] Keep the last successful data when a later polling request fails.
-- [ ] Display a small loading or error message without replacing the cards.
-- [ ] Keep the existing 5-second polling interval.
-- [ ] Allow polling to pause when the browser tab is hidden.
-- [ ] Immediately invalidate and refresh the `stats` query after enqueue, retry, delete, and delete-all-dead.
-- [ ] Keep existing polling for the job table and dead-letter table.
-- [ ] Do not add a dashboard webhook, SSE, or WebSocket.
-
-### 13.3 Backend tests
-
-All tests use Go's standard `testing` and `httptest` packages. No new dependencies.
-
-#### 13.3.1 API integration test
-
-**New file:** `internal/api/handlers_test.go`
-
-- [ ] Read `TEST_DATABASE_URL`; skip the test when it is not set.
-- [ ] Never use the regular `DATABASE_URL`.
-- [ ] Run migrations against the dedicated test database.
-- [ ] Start the API handler using `httptest`.
-- [ ] Test enqueueing a job, listing jobs, and reading stats.
-- [ ] Clean up the test job after the test.
-
-#### 13.3.2 Retry backoff unit test
-
-**New file:** `internal/worker/retry_test.go`
-
-- [ ] Table-driven test for `FullJitterDelay`.
-- [ ] Verify delay is never negative.
-- [ ] Verify delay respects the exponential upper bound.
-- [ ] Verify the configured cap is enforced for large attempt counts.
-
-#### 13.3.3 Webhook unit test
-
-**New file:** `internal/jobtypes/webhook_delivery_test.go`
-
-- [ ] Use `httptest.Server` as the receiver.
-- [ ] Verify the handler sends an HTTP POST with the configured body and `Content-Type: application/json`.
-- [ ] Verify a 2xx response is accepted.
-- [ ] Verify a non-2xx response returns an error.
-- [ ] No request hits a public third-party service.
-
-### 13.4 Verification
-
-- [ ] `gofmt -l .` produces no output.
-- [ ] `go vet ./...` is clean.
-- [ ] `go test ./...` passes (integration test skips without `TEST_DATABASE_URL`).
-- [ ] `npm run build` in `web/` completes without errors.
-- [ ] `TEST_DATABASE_URL="..." go test ./internal/api -run TestAPIIntegration` passes.
+- [x] `gofmt -l .` produces no output.
+- [x] `go vet ./...` is clean.
+- [x] `go test ./...` passes without integration-test configuration.
+- [x] `npm run build` in `web/` completes without errors.
+- [ ] `TEST_DATABASE_URL="..." go test ./internal/api -run TestAPIIntegration` passes against a dedicated Postgres database.
