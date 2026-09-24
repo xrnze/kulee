@@ -122,7 +122,7 @@ func (s *Store) GetJob(ctx context.Context, id int64) (*Job, error) {
 		&job.CreatedAt, &job.UpdatedAt, &job.LastError,
 	)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("get job: job %d not found", id)
+		return nil, fmt.Errorf("get job %d: %w", id, ErrJobNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get job: %w", err)
@@ -177,12 +177,10 @@ func (s *Store) ListJobs(ctx context.Context, cursor int64, limit int, status st
 	return jobs, nil
 }
 
-// Stats returns counts of jobs grouped by status within the sliding window.
-func (s *Store) Stats(ctx context.Context, window time.Duration) (map[string]int, error) {
+// Stats returns current counts of jobs grouped by status.
+func (s *Store) Stats(ctx context.Context) (map[string]int, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT status, COUNT(*) FROM jobs
-		 WHERE created_at >= NOW() - $1::INTERVAL
-		 GROUP BY status`, fmt.Sprintf("%.0f seconds", window.Seconds()),
+		`SELECT status, COUNT(*) FROM jobs GROUP BY status`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("stats: %w", err)

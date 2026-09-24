@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"kulee/internal/jobtypes"
 	"kulee/internal/store"
 )
 
@@ -38,7 +39,9 @@ func getTestStore(t *testing.T) *store.Store {
 
 func TestAPIIntegration(t *testing.T) {
 	s := getTestStore(t)
-	h := NewHandler(s, 5*time.Minute)
+	reg := jobtypes.NewRegistry()
+	reg.Register("send_email", jobtypes.SendEmail, jobtypes.ValidateSendEmail)
+	h := NewHandler(s, 5, reg.Validate)
 
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -46,7 +49,7 @@ func TestAPIIntegration(t *testing.T) {
 	defer server.Close()
 
 	// Enqueue a job.
-	body := `{"type":"send_email","payload":{"to":"test@example.com"}}`
+	body := `{"type":"send_email","payload":{"to":"test@example.com","subject":"Test","body":"Hello"}}`
 	resp, err := http.Post(server.URL+"/api/jobs", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)

@@ -46,6 +46,32 @@ func (s *Store) MarkFailed(ctx context.Context, jobID int64, workerID, lastError
 	return nil
 }
 
+// Cancel changes a pending or running job to the terminal canceled state.
+func (s *Store) Cancel(ctx context.Context, jobID int64) (*Job, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE jobs
+		 SET status = 'canceled', run_after = NULL, locked_by = NULL,
+		     locked_until = NULL, updated_at = NOW()
+		 WHERE id = $1 AND status IN ('pending', 'running')`,
+		jobID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cancel job: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return s.GetJob(ctx, jobID)
+	}
+
+	job, err := s.GetJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if job.Status == "canceled" {
+		return job, nil
+	}
+	return nil, fmt.Errorf("cancel job %d: %w (status %s)", jobID, ErrJobNotCancelable, job.Status)
+}
+
 // RetryDead resets a dead-lettered job back to pending with zero attempts.
 func (s *Store) RetryDead(ctx context.Context, jobID int64) error {
 	res, err := s.db.ExecContext(ctx,

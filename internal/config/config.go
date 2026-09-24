@@ -23,7 +23,6 @@ type Config struct {
 	MaxAttempts    int
 	RetryBase      time.Duration
 	RetryCap       time.Duration
-	StatsWindow    time.Duration
 }
 
 // Load reads .env (if present) then environment variables.
@@ -45,7 +44,7 @@ func Load() (*Config, error) {
 	if cfg.WorkerCount, err = envInt("WORKER_COUNT", 4); err != nil {
 		return nil, err
 	}
-	var ls, sd, ri, rb, rc, sw int
+	var ls, sd, ri, rb, rc int
 	if ls, err = envInt("LEASE_DURATION_SECONDS", 30); err != nil {
 		return nil, err
 	}
@@ -75,11 +74,6 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.RetryCap = time.Duration(rc) * time.Millisecond
-	if sw, err = envInt("STATS_WINDOW_MINUTES", 5); err != nil {
-		return nil, err
-	}
-	cfg.StatsWindow = time.Duration(sw) * time.Minute
-
 	return cfg, nil
 }
 

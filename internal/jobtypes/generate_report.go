@@ -18,14 +18,28 @@ type reportPayload struct {
 
 // GenerateReport generates N rows of fake CSV data in a tight loop.
 // CPU-bound: demonstrates the contrast with I/O-bound job types.
-func GenerateReport(ctx context.Context, raw json.RawMessage) error {
+func ValidateGenerateReport(raw json.RawMessage) error {
 	var p reportPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return fmt.Errorf("generate_report: invalid payload: %w", err)
 	}
 	if p.Rows <= 0 {
-		p.Rows = 100
+		return fmt.Errorf("generate_report: rows must be positive")
 	}
+	if p.OutputFormat != "" && p.OutputFormat != "csv" {
+		return fmt.Errorf("generate_report: output_format must be csv")
+	}
+	return nil
+}
+
+// GenerateReport generates N rows of fake CSV data in a tight loop.
+// CPU-bound: demonstrates the contrast between I/O-bound job types.
+func GenerateReport(ctx context.Context, raw json.RawMessage) error {
+	if err := ValidateGenerateReport(raw); err != nil {
+		return err
+	}
+	var p reportPayload
+	_ = json.Unmarshal(raw, &p)
 	if p.OutputFormat == "" {
 		p.OutputFormat = "csv"
 	}

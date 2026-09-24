@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -16,16 +17,30 @@ type webhookPayload struct {
 	Timeout int    `json:"timeout_seconds"`
 }
 
-// WebhookDelivery performs a real HTTP POST to the target URL.
-// Demonstrates real HTTP client patterns and context cancellation.
-func WebhookDelivery(ctx context.Context, raw json.RawMessage) error {
+// ValidateWebhookDelivery checks the payload required by WebhookDelivery.
+func ValidateWebhookDelivery(raw json.RawMessage) error {
 	var p webhookPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return fmt.Errorf("webhook_delivery: invalid payload: %w", err)
 	}
-	if p.URL == "" {
-		return fmt.Errorf("webhook_delivery: url is required")
+	parsed, err := url.ParseRequestURI(p.URL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("webhook_delivery: url must be absolute")
 	}
+	if p.Timeout < 0 {
+		return fmt.Errorf("webhook_delivery: timeout_seconds cannot be negative")
+	}
+	return nil
+}
+
+// WebhookDelivery performs a real HTTP POST to the target URL.
+// Demonstrates real HTTP client patterns and context cancellation.
+func WebhookDelivery(ctx context.Context, raw json.RawMessage) error {
+	if err := ValidateWebhookDelivery(raw); err != nil {
+		return err
+	}
+	var p webhookPayload
+	_ = json.Unmarshal(raw, &p)
 	if p.Timeout <= 0 {
 		p.Timeout = 10
 	}

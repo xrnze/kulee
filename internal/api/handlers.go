@@ -3,6 +3,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -13,13 +14,21 @@ import (
 
 // Handler holds dependencies for API handlers.
 type Handler struct {
-	store       *store.Store
-	statsWindow time.Duration
+	store              *store.Store
+	defaultMaxAttempts int
+	validateJob        func(string, json.RawMessage) error
 }
 
-// NewHandler creates an API handler with the given store.
-func NewHandler(s *store.Store, statsWindow time.Duration) *Handler {
-	return &Handler{store: s, statsWindow: statsWindow}
+// NewHandler creates an API handler with the given store and job policy.
+func NewHandler(s *store.Store, defaultMaxAttempts int, validateJob func(string, json.RawMessage) error) *Handler {
+	if defaultMaxAttempts < 1 {
+		defaultMaxAttempts = 5
+	}
+	return &Handler{
+		store:              s,
+		defaultMaxAttempts: defaultMaxAttempts,
+		validateJob:        validateJob,
+	}
 }
 
 // Register adds all API routes to the given mux.
@@ -28,6 +37,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/jobs", h.listJobs)
 	mux.HandleFunc("GET /api/jobs/{id}", h.getJob)
 	mux.HandleFunc("POST /api/jobs/{id}/retry", h.retryJob)
+	mux.HandleFunc("POST /api/jobs/{id}/cancel", h.cancelJob)
 	mux.HandleFunc("DELETE /api/jobs/{id}", h.deleteJob)
 	mux.HandleFunc("DELETE /api/jobs/dead", h.deleteAllDead)
 	mux.HandleFunc("GET /api/stats", h.stats)
@@ -86,8 +96,22 @@ func (h *Handler) enqueueJob(w http.ResponseWriter, r *http.Request) {
 	if req.Priority == 0 {
 		req.Priority = 1
 	}
+	if req.Priority < 1 || req.Priority > 10 {
+		writeError(w, http.StatusBadRequest, "priority must be between 1 and 10")
+		return
+	}
 	if req.MaxAttempts == 0 {
-		req.MaxAttempts = 5
+		req.MaxAttempts = h.defaultMaxAttempts
+	}
+	if req.MaxAttempts < 1 || req.MaxAttempts > h.defaultMaxAttempts {
+		writeError(w, http.StatusBadRequest, "max_attempts must be between 1 and "+strconv.Itoa(h.defaultMaxAttempts))
+		return
+	}
+	if h.validateJob != nil {
+		if err := h.validateJob(req.Type, req.Payload); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid job: "+err.Error())
+			return
+		}
 	}
 
 	id, err := h.store.Enqueue(r.Context(), req.Type, req.Payload, req.Priority, req.MaxAttempts)
@@ -186,6 +210,30 @@ func (h *Handler) retryJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toJobResponse(job))
 }
 
+func (h *Handler) cancelJob(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+
+	job, err := h.store.Cancel(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrJobNotFound):
+			writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, store.ErrJobNotCancelable):
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			log.Printf("cancel job error: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to cancel job")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toJobResponse(job))
+}
+
 func (h *Handler) deleteJob(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -213,7 +261,7 @@ func (h *Handler) deleteAllDead(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
-	stats, err := h.store.Stats(r.Context(), h.statsWindow)
+	stats, err := h.store.Stats(r.Context())
 	if err != nil {
 		log.Printf("stats error: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to get stats")

@@ -3,6 +3,8 @@ package worker
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -43,7 +45,7 @@ type Config struct {
 }
 
 // NewPool starts numWorkers goroutines claiming from the store.
-func NewPool(ctx context.Context, s *store.Store, handler JobFunc, cfg Config) *Pool {
+func NewPool(ctx context.Context, s *store.Store, handler JobFunc, cfg Config) (*Pool, error) {
 	// claimCtx gates new claims; jobCtx gates in-flight jobs. They are
 	// separate so a drain (Stop) can stop claiming without aborting work
 	// that is already running.
@@ -61,8 +63,14 @@ func NewPool(ctx context.Context, s *store.Store, handler JobFunc, cfg Config) *
 	}
 
 	for i := 0; i < cfg.WorkerCount; i++ {
+		owner, err := newLeaseOwner()
+		if err != nil {
+			cancelClaim()
+			cancelJobs()
+			return nil, fmt.Errorf("create lease owner: %w", err)
+		}
 		p.wg.Add(1)
-		go p.worker(i)
+		go p.worker(i, owner)
 	}
 
 	go func() {
@@ -70,7 +78,7 @@ func NewPool(ctx context.Context, s *store.Store, handler JobFunc, cfg Config) *
 		close(p.done)
 	}()
 
-	return p
+	return p, nil
 }
 
 // Stop stops the pool from claiming new jobs. Workers finish the job
@@ -92,11 +100,10 @@ func (p *Pool) Done() <-chan struct{} {
 	return p.done
 }
 
-func (p *Pool) worker(id int) {
+func (p *Pool) worker(id int, workerID string) {
 	defer p.wg.Done()
 
-	workerID := hostnamePID()
-	log.Printf("worker %d: started (id=%s)", id, workerID)
+	log.Printf("worker %d: started", id)
 
 	for {
 		select {
@@ -188,17 +195,16 @@ func (p *Pool) handleResult(workerID int, job *store.Job, execErr error, lockedB
 	// lockedBy so a worker that lost its lease cannot stomp the new owner's
 	// row if the job was reaped and re-claimed.
 	backoff := FullJitterDelay(job.Attempts, p.cfg.RetryBase, p.cfg.RetryCap)
-	err := p.store.MarkFailed(ctx, job.ID, lockedBy, execErr.Error(), job.Attempts, p.cfg.MaxAttempts, backoff)
+	err := p.store.MarkFailed(ctx, job.ID, lockedBy, execErr.Error(), job.Attempts, job.MaxAttempts, backoff)
 	if err != nil {
 		log.Printf("worker %d: failed to mark job %d as failed: %v", workerID, job.ID, err)
 	}
 }
 
-// hostnamePID returns a unique worker identifier (hostname:pid).
-// ponytail: hardcoded worker ID, os.Hostname()+os.Getpid() for multi-process.
-func hostnamePID() string {
-	// In production this would use os.Hostname()+os.Getpid().
-	// For simplicity in the demo, we return a static string since
-	// only one process is expected.
-	return "demo-process"
+func newLeaseOwner() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := cryptorand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }

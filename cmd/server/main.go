@@ -43,9 +43,9 @@ func main() {
 
 	// Register job types.
 	reg := jobtypes.NewRegistry()
-	reg.Register("send_email", jobtypes.SendEmail)
-	reg.Register("webhook_delivery", jobtypes.WebhookDelivery)
-	reg.Register("generate_report", jobtypes.GenerateReport)
+	reg.Register("send_email", jobtypes.SendEmail, jobtypes.ValidateSendEmail)
+	reg.Register("webhook_delivery", jobtypes.WebhookDelivery, jobtypes.ValidateWebhookDelivery)
+	reg.Register("generate_report", jobtypes.GenerateReport, jobtypes.ValidateGenerateReport)
 
 	handler := func(ctx context.Context, jobType string, payload json.RawMessage) error {
 		fn, err := reg.Lookup(jobType)
@@ -67,7 +67,10 @@ func main() {
 	poolCtx, poolCancel := context.WithCancel(context.Background())
 	defer poolCancel()
 
-	pool := worker.NewPool(poolCtx, st, handler, poolCfg)
+	pool, err := worker.NewPool(poolCtx, st, handler, poolCfg)
+	if err != nil {
+		log.Fatalf("worker pool: %v", err)
+	}
 
 	// Start reaper goroutine.
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
@@ -94,7 +97,7 @@ func main() {
 
 	// Set up HTTP server.
 	mux := http.NewServeMux()
-	api.NewHandler(st, cfg.StatsWindow).Register(mux)
+	api.NewHandler(st, cfg.MaxAttempts, reg.Validate).Register(mux)
 
 	// Health check for orchestration and the reverse proxy.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
