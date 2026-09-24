@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchStats } from "../lib/api";
 
-const STATUSES = ["pending", "running", "success", "failed", "dead"] as const;
+const STATUSES = ["pending", "running", "success", "failed", "dead", "canceled"] as const;
 
 export default function StatsChart() {
   const { data: stats, isLoading, isFetching, error } = useQuery({
@@ -26,7 +26,7 @@ export default function StatsChart() {
           Queue metrics
         </h2>
         <div className="flex items-center gap-3">
-          <p className="font-mono text-xs">LAST 5 MINUTES</p>
+          <p className="font-mono text-xs">CURRENT QUEUE STATE</p>
           {isFetching && !isLoading && (
             <span className="font-mono text-xs motion-safe:animate-pulse">SYNCING</span>
           )}
@@ -41,7 +41,7 @@ export default function StatsChart() {
 
       <div
         aria-busy={isLoading}
-        className="grid grid-cols-2 gap-0.5 border-2 border-black bg-black sm:grid-cols-3 lg:grid-cols-6"
+        className="grid grid-cols-2 gap-0.5 border-2 border-black bg-black sm:grid-cols-3 lg:grid-cols-7"
       >
         {metrics.map(({ label, count }, index) => (
           <div

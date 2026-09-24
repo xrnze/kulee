@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Job, retryJob, deleteJob, deleteAllDead } from "../lib/api";
+import { Job, retryJob, cancelJob, deleteJob, deleteAllDead } from "../lib/api";
 import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
@@ -24,6 +24,7 @@ const FILTERS = [
   { label: "Success", value: "success" },
   { label: "Failed", value: "failed" },
   { label: "Dead", value: "dead" },
+  { label: "Canceled", value: "canceled" },
 ];
 
 const STATUS_CLASSES: Record<string, string> = {
@@ -32,6 +33,7 @@ const STATUS_CLASSES: Record<string, string> = {
   success: "bg-neutral-200 text-black",
   failed: "bg-neutral-700 text-white",
   dead: "bg-neutral-400 text-black",
+  canceled: "bg-neutral-200 text-black",
 };
 
 const actionClass =
@@ -51,11 +53,19 @@ export default function JobTable({
   notify,
 }: Props) {
   const [confirmation, setConfirmation] = useState<
-    { kind: "all" } | { kind: "job"; id: number } | null
+    { kind: "all" } | { kind: "job"; id: number } | { kind: "cancel"; id: number } | null
   >(null);
   const retry = useMutation({
     mutationFn: retryJob,
     onSuccess: (job) => { notify(`RETRIED #${job.id}`); onAction(); },
+  });
+  const cancel = useMutation({
+    mutationFn: cancelJob,
+    onSuccess: (job) => {
+      setConfirmation(null);
+      notify(`CANCELED #${job.id}`);
+      onAction();
+    },
   });
   const remove = useMutation({
     mutationFn: deleteJob,
@@ -73,7 +83,7 @@ export default function JobTable({
       onAction();
     },
   });
-  const actionError = retry.error ?? remove.error ?? purge.error;
+  const actionError = retry.error ?? cancel.error ?? remove.error ?? purge.error;
 
   return (
     <div>
@@ -215,6 +225,18 @@ export default function JobTable({
                             DELETE
                           </button>
                         </div>
+                      ) : job.status === "pending" || job.status === "running" ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            cancel.reset();
+                            setConfirmation({ kind: "cancel", id: job.id });
+                          }}
+                          disabled={cancel.isPending}
+                          className={actionClass}
+                        >
+                          CANCEL
+                        </button>
                       ) : (
                         <span aria-hidden="true" className="font-mono text-neutral-500">
                           -
@@ -240,17 +262,20 @@ export default function JobTable({
 
       <ConfirmDialog
         open={confirmation !== null}
-        title={confirmation?.kind === "all" ? "Delete all dead jobs?" : `Delete dead job #${confirmation?.id ?? ""}?`}
-        description="This action cannot be undone."
-        confirmLabel="DELETE"
-        busy={confirmation?.kind === "all" ? purge.isPending : remove.isPending}
-        error={confirmation?.kind === "all" ? (purge.error ? String(purge.error) : null) : (remove.error ? String(remove.error) : null)}
+        title={confirmation?.kind === "all" ? "Delete all dead jobs?" : confirmation?.kind === "cancel" ? `Cancel job #${confirmation.id}?` : `Delete dead job #${confirmation?.id ?? ""}?`}
+        description={confirmation?.kind === "cancel" ? "Running work stops cooperatively. This action cannot be undone." : "This action cannot be undone."}
+        confirmLabel={confirmation?.kind === "cancel" ? "CANCEL JOB" : "DELETE"}
+        busyLabel={confirmation?.kind === "cancel" ? "CANCELING" : "DELETING"}
+        busy={confirmation?.kind === "all" ? purge.isPending : confirmation?.kind === "cancel" ? cancel.isPending : remove.isPending}
+        error={confirmation?.kind === "all" ? (purge.error ? String(purge.error) : null) : confirmation?.kind === "cancel" ? (cancel.error ? String(cancel.error) : null) : (remove.error ? String(remove.error) : null)}
         onCancel={() => setConfirmation(null)}
         onConfirm={() => {
           if (confirmation?.kind === "all") {
             purge.mutate();
           } else if (confirmation?.kind === "job") {
             remove.mutate(confirmation.id);
+          } else if (confirmation?.kind === "cancel") {
+            cancel.mutate(confirmation.id);
           }
         }}
       />

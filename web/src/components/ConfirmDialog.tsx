@@ -5,6 +5,7 @@ interface Props {
   title: string;
   description: string;
   confirmLabel: string;
+  busyLabel?: string;
   busy?: boolean;
   error?: string | null;
   onConfirm: () => void;
@@ -16,6 +17,7 @@ export default function ConfirmDialog({
   title,
   description,
   confirmLabel,
+  busyLabel = "DELETING",
   busy = false,
   error = null,
   onConfirm,
@@ -89,7 +91,7 @@ export default function ConfirmDialog({
             disabled={busy}
             className="h-11 border-2 border-black bg-black px-6 text-sm font-black text-white hover:bg-white hover:text-black focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-300"
           >
-            {busy ? "DELETING" : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </button>
         </div>
       </div>
